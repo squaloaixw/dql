@@ -61,6 +61,7 @@ def main():
     print(f"初始化实验配置: L={args.L}, r={args.r}, Iterations={args.iterations}, Seed={args.seed}")
     print("=" * 50)
 
+
     # 2. 实例化配置类
     config = SimulationConfig(
         L=args.L,
