@@ -1,0 +1,7 @@
+归一化中的除零隐患
+
+不要把这称作“Q-learning 与 PG 的融合”，这在学术上显得不专业。将其重新包装为 Multi-Agent Actor-Critic (MAAC) 的变体。
+
+    Critic（评论家）： 负责评估价值（你的 QL 和 QS）。
+
+    Actor（演员）： 负责输出策略（你的 θi​ 和 Softmax 分布）。
