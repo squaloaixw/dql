@@ -32,6 +32,7 @@ def plot_cooperation_rate(coop_rate_history: list, r_val: float, output_dir: str
     ax.set_xlabel('Iterations', fontsize=12)
     ax.set_ylabel('Fraction of Cooperators', fontsize=12)
 
+
     # 设置 Y 轴范围为 0 到 1 (代表 0% 到 100% 合作率)
     ax.set_ylim(-0.05, 1.05)
 
