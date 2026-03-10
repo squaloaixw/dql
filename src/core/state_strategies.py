@@ -32,26 +32,18 @@ class LocalStateProvider(StateProvider):
 
     def _normalize_payoff(self, payoffs: np.ndarray) -> np.ndarray:
         """
-        计算局部归一化收益。
+        计算归一化收益：使用 SPGG 的理论上下界进行静态映射，
+        保证强化学习奖励函数的绝对平稳性（Stationarity）。
         """
-        if self.config.use_z_score:
-            # 1. 计算全局 Z-score
-            mean_p = np.mean(payoffs)
-            std_p = np.std(payoffs) + 1e-8
-            z_scores = (payoffs - mean_p) / std_p
+        # 计算理论收益上下界 (基于 k=4 的冯·诺依曼邻域，每人参与 5 场博弈)
+        max_p = 5.0 * self.config.r * self.config.c
+        min_p = -5.0 * self.config.c
 
-            # 2. 使用 Sigmoid 函数将无界的 Z-score 平滑映射到 (0, 1) 区间
-            # 这样无需猜测数据范围，且处处可导
-            norm_p = 1.0 / (1.0 + np.exp(-z_scores))
-            return norm_p
+        # 线性映射到 [0, 1]
+        norm_p = (payoffs - min_p) / (max_p - min_p)
 
-        else:
-            # 【原方案】局部 Min-Max 归一化
-            local_max = maximum_filter(payoffs, footprint=self.von_neumann_footprint, mode='wrap')
-            local_min = minimum_filter(payoffs, footprint=self.von_neumann_footprint, mode='wrap')
-
-            norm_p = (payoffs - local_min) / (local_max - local_min + self.config.xi)
-            return np.clip(norm_p, 0.0, 1.0)
+        # 裁剪以防浮点误差越界
+        return np.clip(norm_p, 0.0, 1.0)
 
     def get_state(self, last_actions: np.ndarray, last_payoffs: np.ndarray) -> np.ndarray:
         """

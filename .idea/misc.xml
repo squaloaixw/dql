@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="ProjectRootManager" version="2" project-jdk-name="D:\miniconda\conda\envs\lw" project-jdk-type="Python SDK" />
+  <component name="Black">
+    <option name="sdkName" value="D:\Python\conda_env\envs\lw" />
+  </component>
+  <component name="ProjectRootManager" version="2" project-jdk-name="D:\Python\conda_env\envs\lw" project-jdk-type="Python SDK" />
 </project>
