@@ -20,10 +20,10 @@ class DualBrainAgents:
         # ==========================================
         # 局部 Q 表 (L, L, 8种状态, 2种动作)
         # 初始化为微小的随机数，打破初始对称性
-        self.Q_L = np.random.uniform(-0.01, 0.01, size=(self.L, self.L, 8, 2))
+        self.Q_L = np.random.uniform(-0.1, 0.1, size=(self.L, self.L, 8, 2))
 
         # 社会 Q 表 (L, L, 9种状态, 2种动作)
-        self.Q_S = np.random.uniform(-0.01, 0.01, size=(self.L, self.L, 9, 2))
+        self.Q_S = np.random.uniform(-0.1, 0.1, size=(self.L, self.L, 9, 2))
 
         # ==========================================
         # 2. 策略参数 (Actor) - 个体理性与社会信仰的博弈
