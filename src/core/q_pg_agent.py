@@ -5,7 +5,8 @@ from src.config import SimulationConfig
 
 class DualBrainAgents:
     """
-    双视角 Q-Learning + 策略梯度自适应融合智能体。
+    【修改点】重新包装为 Multi-Agent Actor-Critic (MAAC) 的变体。
+    Critic 负责评估价值 (QL 和 QS)，Actor 负责输出策略 (theta 和 Softmax)。
     使用向量化张量同时管理 L x L 个体。
     """
 
@@ -14,15 +15,15 @@ class DualBrainAgents:
         self.L = config.L
         self.row_idx, self.col_idx = np.indices((self.L, self.L))
 
-        # Q^L: 8 个局部状态 x 2 个动作
-        self.Q_L = np.zeros((self.L, self.L, 8, 2), dtype=float)
+        # 【修改点】Q^L: 6 个局部状态 x 2 个动作
+        self.Q_L = np.zeros((self.L, self.L, 6, 2), dtype=float)
 
         # Q^S: 9 个社会状态 x 2 个动作
         self.Q_S = np.zeros((self.L, self.L, 9, 2), dtype=float)
-        # theta -> w = sigmoid(theta)
+        # theta -> w = sigmoid(theta) (Actor 策略参数)
         self.theta = np.zeros((self.L, self.L), dtype=float)
 
-        # 策略梯度基线
+        # 策略梯度基线 (Actor 评估基线)
         self.baseline = np.zeros((self.L, self.L), dtype=float)
 
     @staticmethod
@@ -39,8 +40,10 @@ class DualBrainAgents:
         return q_l_vals, q_s_vals
 
     def choose_action_and_get_grad(self, local_states: np.ndarray, social_states: np.ndarray):
+        # Critic 评估价值
         q_l_vals, q_s_vals = self._get_q_values(local_states, social_states)
 
+        # Actor 输出融合策略
         w = self.get_weights()
         w_expanded = w[..., np.newaxis]
 
@@ -96,7 +99,7 @@ class DualBrainAgents:
         td_error = G_target - q_current
         self.Q_S[self.row_idx, self.col_idx, delayed_states, delayed_actions] += self.config.alpha_2 * td_error
 
-        # 策略梯度：theta <- theta + eta * A * grad log pi
+        # Actor 策略更新：theta <- theta + eta * A * grad log pi
         advantage = G_target - self.baseline
         self.theta += self.config.eta * advantage * delayed_grad_log_pi
 

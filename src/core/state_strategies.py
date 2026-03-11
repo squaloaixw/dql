@@ -18,7 +18,7 @@ class StateProvider(ABC):
 
 class LocalStateProvider(StateProvider):
     """
-    局部经验状态，共 2 x 4 = 8 种状态。
+    局部经验状态，共 2 (动作) x 3 (收益段) = 6 种状态。
 
     这里将收益归一化统一改为“基于理论收益范围的绝对归一化”，
     不再使用局部相对 min-max 归一化。
@@ -55,8 +55,6 @@ class LocalStateProvider(StateProvider):
         全局统一采用理论收益范围绝对归一化。
         """
         if self.config.use_z_score:
-            # 如果你仍想保留 z-score 选项，可在这里保留；
-            # 但若要“完全统一成绝对归一化”，建议不要走这个分支。
             z = (payoffs - np.mean(payoffs)) / (np.std(payoffs) + self.config.xi)
             return self._sigmoid(z)
 
@@ -69,8 +67,10 @@ class LocalStateProvider(StateProvider):
 
     def get_state(self, last_actions: np.ndarray, last_payoffs: np.ndarray) -> np.ndarray:
         norm_p = self._normalize_payoff(last_payoffs)
-        payoff_bins = np.digitize(norm_p, bins=[0.25, 0.5, 0.75])
-        return last_actions * 4 + payoff_bins
+        # 【修改点】离散化为 3 段，阈值为 1/3 和 2/3
+        payoff_bins = np.digitize(norm_p, bins=[1.0 / 3.0, 2.0 / 3.0])
+        # 【修改点】动作 (0, 1) * 3 + 收益段 (0, 1, 2) -> 产生 0-5 共 6 个状态
+        return last_actions * 3 + payoff_bins
 
 
 class SocialStateProvider(StateProvider):

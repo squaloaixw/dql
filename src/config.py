@@ -13,7 +13,7 @@ class SimulationConfig:
 
     # 1. Spatial PGG 基础参数
     L: int = 100
-    r: float = 3.0
+    r: float = 3.8
     c: float = 1.0
     iterations: int = 10000
 
@@ -23,8 +23,8 @@ class SimulationConfig:
     use_z_score: bool = False
 
     # 3. 局部 Q 表
-    alpha_1: float = 0.1
-    gamma_1: float = 0.9
+    alpha_1: float = 0.5
+    gamma_1: float = 0.5
 
     # 4. 社会 Q 表
     alpha_2: float = 0.1
@@ -32,12 +32,12 @@ class SimulationConfig:
 
     # 5. 动作选择与策略梯度
     tau: float = 0.1
-    eta: float = 0.05
+    eta: float = 0.5
     baseline_alpha: float = 0.05
 
     # 6. 工程参数
     seed: int = 42
-    log_interval: int = 1000
+    log_interval: int = 5000
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "SimulationConfig":
