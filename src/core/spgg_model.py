@@ -1,16 +1,20 @@
-import numpy as np
 from collections import deque
+
+import numpy as np
 from scipy.ndimage import convolve
 
 from src.config import SimulationConfig
-from src.core.state_strategies import LocalStateProvider, SocialStateProvider
 from src.core.q_pg_agent import DualBrainAgents
+from src.core.state_strategies import LocalStateProvider, SocialStateProvider
 
 
 class SPGGEnvironment:
     """
-    空间公共物品博弈环境核心模块，整合双大脑智能体与状态提取器。
-    使用完全向量化的方式计算群体博弈收益与状态流转。
+    空间公共物品博弈环境。
+    关键修正：
+    1. 局部收益归一化改为与模型一致的“邻域相对归一化”；
+    2. 合作率记录改为记录“执行当前轮动作后的状态”，避免日志滞后一轮；
+    3. 历史数据入队时显式 copy，避免后续维护时出现引用语义歧义。
     """
 
     def __init__(self, config: SimulationConfig):
@@ -18,153 +22,165 @@ class SPGGEnvironment:
         self.L = config.L
         self.N = config.N_steps
 
-        # 设定随机种子
         if self.config.seed is not None:
             np.random.seed(self.config.seed)
 
-        # 1. 实例化策略与大脑
         self.local_provider = LocalStateProvider(config)
         self.social_provider = SocialStateProvider(config)
         self.agent = DualBrainAgents(config)
 
-        # 2. 卷积核定义
-        # 用于计算自身参与的 5 人小组 (中心 + 4 个邻居)
-        self.kernel_5 = np.array([
-            [0, 1, 0],
-            [1, 1, 1],
-            [0, 1, 0]
-        ])
-        # 用于仅计算 4 个邻居 (不含自身，用于社会观察的邻居均值)
-        self.kernel_4 = np.array([
-            [0, 1, 0],
-            [1, 0, 1],
-            [0, 1, 0]
-        ])
+        self.kernel_5 = np.array(
+            [
+                [0, 1, 0],
+                [1, 1, 1],
+                [0, 1, 0],
+            ],
+            dtype=float,
+        )
+        self.kernel_4 = np.array(
+            [
+                [0, 1, 0],
+                [1, 0, 1],
+                [0, 1, 0],
+            ],
+            dtype=float,
+        )
 
-        # 3. 环境状态初始化 (随机初始化 0 或 1)
-        self.actions = np.random.randint(0, 2, size=(self.L, self.L))
+        # 当前“最近一轮”的动作与收益，用来构造下一轮状态
+        self.actions = np.random.randint(0, 2, size=(self.L, self.L), dtype=np.int8)
         self.payoffs = self._calculate_payoffs(self.actions)
 
-        # 4. 历史缓冲队列 (用于 N 步延迟更新与平均计算)
+        # 存过去 N 步的动作 / 归一化收益，用于社会观察状态
         self.recent_actions = deque(maxlen=self.N)
         self.recent_norm_payoffs = deque(maxlen=self.N)
-        # history_buffer 存放元组: (s^S_t, 动作, 归一化收益, 梯度因子)
+
+        # 存 (s^S(t), a(t), \tilde{pi}(t), grad_log_pi(t))，供 N 步延迟更新
         self.history_buffer = deque(maxlen=self.N)
 
-        # 数据追踪
         self.coop_rate_history = []
 
     def _calculate_payoffs(self, actions: np.ndarray) -> np.ndarray:
         """
-        计算公共物品博弈 (PGG) 中每个节点的最终收益。
-        严格按照标准 SPGG 规则：每个节点参与 5 场博弈，每次合作付出成本 c。
+        标准 SPGG：
+        - 每个节点参与 5 个五人小组（自己为中心 + 四个邻居为中心）；
+        - 每次合作在参与的小组中支付成本 c；
+        - 小组总投入乘以 r 后由 5 名成员均分。
         """
-        # 1. 统计每个 5 人小组内的合作者数量 Nc
-        Nc = convolve(actions, self.kernel_5, mode='wrap')
-
-        # 2. 该小组创造的公共收益（被 5 个成员平分后的单份收益）
+        Nc = convolve(actions.astype(float), self.kernel_5, mode="wrap")
         group_benefit = (self.config.r * self.config.c * Nc) / 5.0
-
-        # 3. 每个人从自己参与的 5 个小组中获得的收益总和
-        total_benefit = convolve(group_benefit, self.kernel_5, mode='wrap')
-
-        # 4. 减去自身作为合作者在 5 个小组中付出的总成本 (5 * c)
+        total_benefit = convolve(group_benefit, self.kernel_5, mode="wrap")
         total_payoffs = total_benefit - 5.0 * self.config.c * actions
         return total_payoffs
 
     def _get_social_state(self) -> np.ndarray:
         """
-        提取社会观察状态 s^S(t)。需要计算过去 N 步的邻居平均特征。
+        严格使用“过去 N 步”的邻居平均合作率与邻居平均归一化收益。
+        队列里保存的就是当前决策前可观测到的最近 N 个历史截面。
         """
-        # 取过去 N 步的时间维度的均值
-        avg_action = np.mean(self.recent_actions, axis=0) if self.recent_actions else self.actions
-        avg_norm_payoff = np.mean(self.recent_norm_payoffs,
-                                  axis=0) if self.recent_norm_payoffs else self.local_provider._normalize_payoff(
-            self.payoffs)
+        if len(self.recent_actions) == 0:
+            avg_action = self.actions.astype(float)
+        else:
+            avg_action = np.mean(np.stack(self.recent_actions, axis=0), axis=0)
 
-        # 计算空间维度上的邻居均值 (除以 4 个邻居)
-        neighbor_avg_coop = convolve(avg_action, self.kernel_4, mode='wrap') / 4.0
-        neighbor_avg_norm_payoff = convolve(avg_norm_payoff, self.kernel_4, mode='wrap') / 4.0
+        if len(self.recent_norm_payoffs) == 0:
+            avg_norm_payoff = self.local_provider._normalize_payoff(self.payoffs)
+        else:
+            avg_norm_payoff = np.mean(np.stack(self.recent_norm_payoffs, axis=0), axis=0)
+
+        neighbor_avg_coop = convolve(avg_action, self.kernel_4, mode="wrap") / 4.0
+        neighbor_avg_norm_payoff = convolve(avg_norm_payoff, self.kernel_4, mode="wrap") / 4.0
 
         return self.social_provider.get_state(neighbor_avg_coop, neighbor_avg_norm_payoff)
 
     def run(self):
-        """
-        环境主循环。
-        """
         print(f"🚀 启动双视角融合 SPGG 模拟 (L={self.L}, iterations={self.config.iterations})...")
 
         for t in range(self.config.iterations):
-            # 记录合作率指标
-            coop_rate = np.mean(self.actions)
-            self.coop_rate_history.append(coop_rate)
-
-            # 归一化当前时刻的收益 (为社会状态队列和局部状态提供输入)
+            # 当前可观测历史（对应状态 s(t) 的输入）
             norm_payoffs = self.local_provider._normalize_payoff(self.payoffs)
+            self.recent_actions.append(self.actions.copy())
+            self.recent_norm_payoffs.append(norm_payoffs.copy())
 
-            # 更新用于计算社会状态的近期历史
-            self.recent_actions.append(self.actions)
-            self.recent_norm_payoffs.append(norm_payoffs)
-
-            # ==========================================
-            # STEP 1: 提取当前状态
-            # ==========================================
+            # 1. 提取当前状态
             s_L = self.local_provider.get_state(self.actions, self.payoffs)
             s_S = self._get_social_state()
 
-            # ==========================================
-            # STEP 2: N 步延迟更新 (如果缓冲区满 N 步)
-            # ==========================================
+            # 2. 满 N 步后执行 Q^S + PG 延迟更新
             if len(self.history_buffer) == self.N:
-                # 计算 N 步累积折扣回报 G_{t-N:t}
-                G = np.zeros((self.L, self.L))
-                for m, item in enumerate(self.history_buffer):
-                    reward_m = item[2]  # buffer 第 2 项是 norm_payoffs (收益)
-                    G += (self.config.gamma_2 ** m) * reward_m
+                G_returns = np.zeros((self.L, self.L), dtype=float)
+                for m, (_, _, reward_m, _) in enumerate(self.history_buffer):
+                    G_returns += (self.config.gamma_2 ** m) * reward_m
 
-                # 取出 t-N 时刻的缓存数据
                 delayed_s_S, delayed_a, _, delayed_grad = self.history_buffer[0]
-
-                # 执行社会 Q 表和策略梯度的更新 (此时的目标状态即为当前的 s_S)
                 self.agent.update_social_q_and_pg(
                     delayed_states=delayed_s_S,
                     delayed_actions=delayed_a,
-                    G_returns=G,
+                    G_returns=G_returns,
                     current_states=s_S,
-                    delayed_grad_log_pi=delayed_grad
+                    delayed_grad_log_pi=delayed_grad,
                 )
 
-            # ==========================================
-            # STEP 3: 决策与行动 (前向传播)
-            # ==========================================
+            # 3. 根据融合策略选动作
             new_actions, grad_log_pi = self.agent.choose_action_and_get_grad(s_L, s_S)
 
-            # ==========================================
-            # STEP 4: 环境流转，计算新收益
-            # ==========================================
+            # 4. 环境流转并得到收益
             new_payoffs = self._calculate_payoffs(new_actions)
             new_norm_payoffs = self.local_provider._normalize_payoff(new_payoffs)
 
-            # ==========================================
-            # STEP 5: 单步即时更新 (局部 Q 表)
-            # ==========================================
-            # 为了进行 TD 更新，我们需要拿到执行新动作后进入的下一个局部状态 s^L_{t+1}
+            # 5. 单步局部 Q 更新
             s_L_next = self.local_provider.get_state(new_actions, new_payoffs)
-            self.agent.update_local_q(s_L, new_actions, new_norm_payoffs, s_L_next)
+            self.agent.update_local_q(
+                states=s_L,
+                actions=new_actions,
+                norm_payoffs=new_norm_payoffs,
+                next_states=s_L_next,
+            )
 
-            # ==========================================
-            # STEP 6: 压入历史队列并推进时间
-            # ==========================================
-            # 注意：存入的是进行决策时的社会状态 s_S、作出的动作、获得的归一化收益以及梯度
-            self.history_buffer.append((s_S, new_actions, new_norm_payoffs, grad_log_pi))
+            # 6. 将本轮经验压入历史缓冲，用于未来 N 步更新
+            self.history_buffer.append(
+                (
+                    s_S.copy(),
+                    new_actions.copy(),
+                    new_norm_payoffs.copy(),
+                    grad_log_pi.copy(),
+                )
+            )
 
+            # 7. 推进到下一轮
             self.actions = new_actions
             self.payoffs = new_payoffs
 
-            # 打印进度
-            if (t + 1) % 1000 == 0:
+            # 记录“当前轮执行后的”合作率，避免日志相位滞后
+            coop_rate = float(np.mean(self.actions))
+            self.coop_rate_history.append(coop_rate)
+
+            if (t + 1) % self.config.log_interval == 0:
+                w = self.agent.get_weights()
+                theta = self.agent.theta
+
+                mean_w = float(np.mean(w))
+                std_w = float(np.std(w))
+                w_p10, w_p50, w_p90 = np.percentile(w, [10, 50, 90])
+
+                mean_theta = float(np.mean(theta))
+                std_theta = float(np.std(theta))
+                mean_abs_theta = float(np.mean(np.abs(theta)))
+
+                mean_abs_grad = float(np.mean(np.abs(grad_log_pi)))
+
+                w_c = float(np.mean(w[self.actions == 1])) if np.any(self.actions == 1) else np.nan
+                w_d = float(np.mean(w[self.actions == 0])) if np.any(self.actions == 0) else np.nan
+
                 print(
-                    f"Iteration {t + 1:05d}/{self.config.iterations} | Coop Rate: {coop_rate:.4f} | 权重均值 w: {np.mean(1 / (1 + np.exp(-self.agent.theta))):.3f}")
+                    f"Iteration {t + 1:05d}/{self.config.iterations} | "
+                    f"Coop Rate: {coop_rate:.4f} | "
+                    f"mean w: {mean_w:.6f} | std w: {std_w:.6f} | "
+                    f"w[p10,p50,p90]=({w_p10:.6f}, {w_p50:.6f}, {w_p90:.6f}) | "
+                    f"mean theta: {mean_theta:.6e} | std theta: {std_theta:.6e} | "
+                    f"mean|theta|: {mean_abs_theta:.6e} | "
+                    f"mean|grad|: {mean_abs_grad:.6e}"
+                    f"... | mean w(C): {w_c:.6f} | mean w(D): {w_d:.6f}"
+                )
 
         print("✅ 模拟结束！")
         return self.coop_rate_history
