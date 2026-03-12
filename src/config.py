@@ -18,13 +18,13 @@ class SimulationConfig:
     iterations: int = 10000
 
     # 2. 状态空间 / 回报参数
-    N_steps: int = 5
+    N_steps: int = 10
     xi: float = 1e-6
-    use_z_score: bool = False
+    use_z_score: bool = True
 
     # 3. 局部 Q 表
     alpha_1: float = 0.5
-    gamma_1: float = 0.5
+    gamma_1: float = 0.1
 
     # 4. 社会 Q 表
     alpha_2: float = 0.1
@@ -32,12 +32,16 @@ class SimulationConfig:
 
     # 5. 动作选择与策略梯度
     tau: float = 0.1
-    eta: float = 0.5
+    eta: float = 0.01
     baseline_alpha: float = 0.05
 
     # 6. 工程参数
     seed: int = 42
-    log_interval: int = 5000
+    log_interval: int = 2000
+
+    # 自适应融合开关与固定参数
+    adaptive_fusion: bool = True  # 是否开启自适应调整双Q融合比例
+    fixed_w: float = 0.5  # 若关闭自适应，使用的固定社会观察融合比例 w
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "SimulationConfig":

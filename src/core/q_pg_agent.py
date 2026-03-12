@@ -20,6 +20,7 @@ class DualBrainAgents:
 
         # Q^S: 9 个社会状态 x 2 个动作
         self.Q_S = np.zeros((self.L, self.L, 9, 2), dtype=float)
+
         # theta -> w = sigmoid(theta) (Actor 策略参数)
         self.theta = np.zeros((self.L, self.L), dtype=float)
 
@@ -32,7 +33,15 @@ class DualBrainAgents:
         return 1.0 / (1.0 + np.exp(-x))
 
     def get_weights(self) -> np.ndarray:
-        return self._sigmoid(self.theta)
+        """
+        获取当前每个智能体的社会观察融合比例 w
+        """
+        if self.config.adaptive_fusion:
+            # 开启自适应时，w 由策略参数 theta 决定
+            return self._sigmoid(self.theta)
+        else:
+            # 关闭自适应时，w 使用 config 中预设的固定常量
+            return np.full((self.L, self.L), self.config.fixed_w, dtype=float)
 
     def _get_q_values(self, local_states: np.ndarray, social_states: np.ndarray):
         q_l_vals = self.Q_L[self.row_idx, self.col_idx, local_states]
@@ -65,16 +74,18 @@ class DualBrainAgents:
         D = w_expanded * (1.0 - w_expanded) * (q_s_vals - q_l_vals)
         expected_D = np.sum(pi * D, axis=-1)
         actual_D = D[self.row_idx, self.col_idx, actions]
+
+        # 即使关闭自适应也计算梯度并返回以保持外部 API 一致，但外部更新时会予以忽略
         grad_log_pi = (actual_D - expected_D) / self.config.tau
 
         return actions, grad_log_pi
 
     def update_local_q(
-        self,
-        states: np.ndarray,
-        actions: np.ndarray,
-        norm_payoffs: np.ndarray,
-        next_states: np.ndarray,
+            self,
+            states: np.ndarray,
+            actions: np.ndarray,
+            norm_payoffs: np.ndarray,
+            next_states: np.ndarray,
     ):
         q_current = self.Q_L[self.row_idx, self.col_idx, states, actions]
         q_next_max = np.max(self.Q_L[self.row_idx, self.col_idx, next_states], axis=-1)
@@ -83,12 +94,12 @@ class DualBrainAgents:
         self.Q_L[self.row_idx, self.col_idx, states, actions] += self.config.alpha_1 * td_error
 
     def update_social_q_and_pg(
-        self,
-        delayed_states: np.ndarray,
-        delayed_actions: np.ndarray,
-        G_returns: np.ndarray,
-        current_states: np.ndarray,
-        delayed_grad_log_pi: np.ndarray,
+            self,
+            delayed_states: np.ndarray,
+            delayed_actions: np.ndarray,
+            G_returns: np.ndarray,
+            current_states: np.ndarray,
+            delayed_grad_log_pi: np.ndarray,
     ):
         # Q^S 的 N 步目标
         q_current = self.Q_S[self.row_idx, self.col_idx, delayed_states, delayed_actions]
@@ -99,12 +110,14 @@ class DualBrainAgents:
         td_error = G_target - q_current
         self.Q_S[self.row_idx, self.col_idx, delayed_states, delayed_actions] += self.config.alpha_2 * td_error
 
-        # Actor 策略更新：theta <- theta + eta * A * grad log pi
-        advantage = G_target - self.baseline
-        self.theta += self.config.eta * advantage * delayed_grad_log_pi
+        # 仅在开启自适应融合时，更新 Actor 的策略参数 theta 和基线 baseline
+        if self.config.adaptive_fusion:
+            # Actor 策略更新：theta <- theta + eta * A * grad log pi
+            advantage = G_target - self.baseline
+            self.theta += self.config.eta * advantage * delayed_grad_log_pi
 
-        # 平滑更新 baseline
-        self.baseline = (
-            (1.0 - self.config.baseline_alpha) * self.baseline
-            + self.config.baseline_alpha * G_target
-        )
+            # 平滑更新 baseline
+            self.baseline = (
+                    (1.0 - self.config.baseline_alpha) * self.baseline
+                    + self.config.baseline_alpha * G_target
+            )

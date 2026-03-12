@@ -30,7 +30,7 @@ def main():
     parser = argparse.ArgumentParser(description="运行双视角融合 SPGG 模型")
     parser.add_argument("--r", type=float, default=3.6, help="协同因子 r")
     parser.add_argument("--L", type=int, default=100, help="网格边长 L")
-    parser.add_argument("--iterations", type=int, default=50000, help="最大迭代轮数")
+    parser.add_argument("--iterations", type=int, default=20000, help="最大迭代轮数")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     args = parser.parse_args()
 
